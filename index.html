@@ -102,8 +102,9 @@ body.lite #frost{backdrop-filter:none!important;-webkit-backdrop-filter:none!imp
   /* mobile is a scrollable sheet of content over a fixed backdrop: nothing is hidden */
   html,body{height:auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:none}
   .brand{left:16px;top:16px}
-  .hamb{bottom:16px;left:16px;width:52px;height:52px}
-  .panel{left:12px;right:12px;top:auto;bottom:78px;width:auto;max-height:56vh;border-radius:22px;
+  .hamb{bottom:calc(16px + env(safe-area-inset-bottom,0px));left:16px;width:52px;height:52px}
+  .panel{left:12px;right:12px;top:auto;bottom:calc(78px + env(safe-area-inset-bottom,0px));width:auto;
+    max-height:56vh;max-height:56dvh;border-radius:22px;
     transform:translateY(calc(100% + 100px))}
   /* no backdrop-filter here: everything the sheet would blur — its own rim, its bevels and the
      shader-drawn knobs — lives in the canvas underneath it, so a backdrop blur softens the material
@@ -298,7 +299,10 @@ vec3 glass(vec2 uv, vec2 p, vec2 c, vec2 b, float r, float d, float rimPx, float
      the medial axis and the spine can never print. This is what a baked displacement map does:
      neutral grey in the middle, values only inside the rim band. */
   float shortSide=min(b.x,b.y);
-  float bevelW=min(uBevelPx*uPxP, shortSide*0.45);   /* where the plateau ends */
+  float bevelW=min(uBevelPx*uPxP, shortSide*0.30);   /* where the plateau ends.
+       A cap of 0.45 disappeared the plateau on a 22px-tall bead (2*0.45*22 = 20 of 22px) and turned
+       its rim into a doubled ring, which read as a corrupt control on phones. 0.30 always leaves a
+       flat interior, and it only binds on surfaces smaller than ~3x the bevel width. */
   vec2 pl=p-c;
   float eo=bevelW*0.45;
   float dSmooth=(sdr(pl,b,r)
@@ -453,6 +457,16 @@ void main(){
   const frostEl=document.getElementById("frost");
   let useTex=0, texAspect=1.7778;
 
+  /* The scissor is the shape's bounding box, so a surface's own anti-aliasing ramp — half of it lies
+     *outside* the boundary — was being guillotined: the outermost row of the rim rendered as a hard
+     cut instead of a fade, which reads as "the top of the shape is clipped". Give every surface a
+     few px of room; `discard` keeps the extra region transparent, so nothing else changes. */
+  const PADP=Math.max(0,Math.min(24,isFinite(parseFloat(q.get("pad")))?parseFloat(q.get("pad")):8));
+  /* The shape is drawn a hair INSIDE its layout box, the way macOS insets a control's visual shape
+     within its frame: flush with the box, the outer half of the rim's anti-aliasing ramp and the
+     top of the specular band land on the boundary pixel and read as a flat, clipped lid. The layout
+     does not move — only the drawn silhouette shrinks by this many CSS px per side. */
+  const INSETP=Math.max(0,Math.min(4,isFinite(parseFloat(q.get("inset")))?parseFloat(q.get("inset")):1));
   const S={rim:2.0, dep:0.074, bevel:29, curve:2.0, frost:0.0, fill:0.045, aaDeg:62, ai:0.75, baDeg:232, bi:0.45, ca:0.42};
   const num=(k,f)=>{const v=parseFloat(q.get(k)); if(isFinite(v)) f(v);};
   num("rim",v=>S.rim=v); num("dep",v=>S.dep=v); num("bevel",v=>S.bevel=v); num("curve",v=>S.curve=v);
@@ -530,7 +544,7 @@ void main(){
     if(btn) btn.click(); } else { setBg("img/bg2.jpg"); document.querySelectorAll("#thumbs button")[2].classList.add("on"); }
 
   let ptr=[0.5,0.5];
-  addEventListener("pointermove",e=>{ptr=[e.clientX/innerWidth,1-e.clientY/innerHeight];},{passive:true});
+  addEventListener("pointermove",e=>{ptr=[(e.clientX-VIEW.left)/VIEW.w,1-(e.clientY-VIEW.top)/VIEW.h];},{passive:true});
 
   /* every range gets a wrapper + a knob element; the knob is pure geometry, the shader
      paints its glass (the native thumb is transparent but still draggable) */
@@ -555,30 +569,56 @@ void main(){
   ];
   const surfaces=[...backSurfaces,...frontSurfaces];
   sync();   /* knobs exist now: place them (the first sync ran before they were created) */
+  /* ---- ONE coordinate system: the canvas' own CSS box ----
+     Every surface is mapped through VIEW, never through innerWidth/innerHeight. On iOS Safari a
+     `position:fixed` canvas sized `inset:0` follows the layout viewport while `window.innerHeight`
+     reports the *visual* viewport (toolbars subtracted): the two disagree by 15-20%, so every pane
+     was drawn that much larger and higher than its DOM element and drifted as the toolbar moved.
+     Measuring the canvas rect and dividing by it is exact on any engine, at any DPR, always. */
+  let VIEW={w:1,h:1,left:0,top:0};
+  function measureView(){
+    const r=cv.getBoundingClientRect();
+    VIEW={w:r.width||1,h:r.height||1,left:r.left,top:r.top};
+  }
   function rectOf(s){
     if(!s.open()) return null;
     const r=s.el.getBoundingClientRect();
     if(r.width<2||r.height<2) return null;
     const W=cv.width, H=cv.height, a=W/H;
-    const cx=((r.left+r.width/2)/innerWidth-0.5)*a, cy=1-(r.top+r.height/2)/innerHeight-0.5;
-    const hx=(r.width/2/innerWidth)*a, hy=r.height/2/innerHeight;
+    const ins=INSETP;
+    const x=(r.left-VIEW.left+ins)/VIEW.w, y=(r.top-VIEW.top+ins)/VIEW.h;
+    const w=Math.max(1,r.width-2*ins)/VIEW.w, h=Math.max(1,r.height-2*ins)/VIEW.h;
+    const cx=(x+w/2-0.5)*a, cy=0.5-(y+h/2);
+    const hx=w/2*a, hy=h/2;
     /* device-pixel box for the scissor (origin bottom-left) */
-    const sx=W/innerWidth, sy=H/innerHeight;
-    const box={x0:r.left*sx, x1:(r.left+r.width)*sx,
-               y0:H-(r.top+r.height)*sy, y1:H-r.top*sy};
-    const op=parseFloat(getComputedStyle(s.el).opacity);
+    const sx=W/VIEW.w, sy=H/VIEW.h;
+    const box={x0:(r.left-VIEW.left)*sx, x1:(r.left-VIEW.left+r.width)*sx,
+               y0:H-(r.top-VIEW.top+r.height)*sy, y1:H-(r.top-VIEW.top)*sy};
+    const cs=getComputedStyle(s.el);
+    const op=parseFloat(cs.opacity);
     if(!(op>0.01)) return null;
-    return {cx,cy,hx,hy,r:s.r/innerHeight,box,clip:s.clip,a:op};
+    /* the radius comes from the element, not a constant: the sheet is 22px on phones and 26px on
+       desktop, and drawing 26 left a crescent of unblurred backdrop inside each corner */
+    const rad=Math.max(0,(parseFloat(cs.borderTopLeftRadius)||s.r)-ins);
+    return {cx,cy,hx,hy,r:rad/VIEW.h,box,clip:s.clip,a:op};
   }
   function boxOf(el){
     const r=el.getBoundingClientRect();
-    const W=cv.width, H=cv.height, sx=W/innerWidth, sy=H/innerHeight;
-    return {x0:r.left*sx, x1:(r.left+r.width)*sx, y0:H-(r.top+r.height)*sy, y1:H-r.top*sy};
+    const W=cv.width, H=cv.height, sx=W/VIEW.w, sy=H/VIEW.h;
+    return {x0:(r.left-VIEW.left)*sx, x1:(r.left-VIEW.left+r.width)*sx,
+            y0:H-(r.top-VIEW.top+r.height)*sy, y1:H-(r.top-VIEW.top)*sy};
   }
   function resize(){
+    measureView();
     const want=parseFloat(q.get("dpr"));
-    const dpr=isFinite(want)?Math.max(0.75,Math.min(want,3)):Math.max(2,Math.min(devicePixelRatio||1,2.5));
-    const w=Math.round(innerWidth*dpr), h=Math.round(innerHeight*dpr);
+    /* render at the screen's real density. Capping below devicePixelRatio (2.5 on a 3x phone) is
+       what left every shader edge soft and stair-stepped next to crisp DOM text: the browser
+       upscales the canvas by 1.2x while the text next to it is drawn natively. */
+    let dpr=isFinite(want)?Math.max(0.75,Math.min(want,4)):Math.min(devicePixelRatio||1,3);
+    /* ...but never more than ~6M device pixels per canvas, so a big retina desktop does not
+       quietly render 8M-pixel frames twice per frame (1280x800@2 = 4.1M passes untouched) */
+    dpr=Math.max(1,Math.min(dpr,Math.sqrt(6.0e6/(VIEW.w*VIEW.h))));
+    const w=Math.round(VIEW.w*dpr), h=Math.round(VIEW.h*dpr);
     for(const R of [back,front]){
       if(!R) continue;
       if(R.c.width!==w||R.c.height!==h){R.c.width=w;R.c.height=h;}
@@ -596,7 +636,7 @@ void main(){
     g.uniform1f(U.time,(now-t0)/1000);
     g.uniform2f(U.ptr,ptr[0],ptr[1]);
     g.uniform1f(U.depth,S.dep);
-    g.uniform1f(U.pxp,1.0/R.c.clientHeight);
+    g.uniform1f(U.pxp,1.0/VIEW.h);   /* CSS px -> p-space, from the canvas box, not innerHeight */
     g.uniform1f(U.rim,S.rim);
     g.uniform1f(U.bevel,S.bevel);
     g.uniform1f(U.curve,S.curve);
@@ -631,6 +671,9 @@ void main(){
     for(const rec of list.map(rectOf)){
       if(!rec) continue;
       let {x0,y0,x1,y1}=rec.box;
+      const pad=PADP*(cv.width/VIEW.w);   /* CSS px -> device px */
+      x0=Math.max(0,x0-pad); y0=Math.max(0,y0-pad);
+      x1=Math.min(cv.width,x1+pad); y1=Math.min(cv.height,y1+pad);
       if(rec.clip){
         const c=boxOf(rec.clip);
         x0=Math.max(x0,c.x0); x1=Math.min(x1,c.x1);
@@ -654,11 +697,20 @@ void main(){
     const overlap=isOpen() &&
       br.right>pr.left && br.left<pr.right && br.bottom>pr.top && br.top<pr.bottom &&
       parseFloat(getComputedStyle(blurbEl).opacity)>0.02;
-    if(overlap){
+    /* at frost 0 a backdrop-filter still composites a layer — with saturate(1.04) it tints the
+       rectangle a hair, and on iOS it re-copies a WebGL canvas that may already be a frame behind.
+       So the layer is switched off entirely unless the material is actually frosted. */
+    const frosted=overlap&&S.frost>0.02;
+    if(frosted){
       frostEl.style.left=pr.left+"px"; frostEl.style.top=pr.top+"px";
       frostEl.style.width=pr.width+"px"; frostEl.style.height=pr.height+"px";
+      frostEl.style.borderRadius=getComputedStyle(panelEl).borderTopLeftRadius;
+      frostEl.style.backdropFilter="";
       frostEl.style.opacity="1";
-    } else frostEl.style.opacity="0";
+    } else {
+      frostEl.style.backdropFilter="none";
+      frostEl.style.opacity="0";
+    }
     if(!still) requestAnimationFrame(frame);
   }
   requestAnimationFrame(frame);
@@ -676,7 +728,23 @@ void main(){
     cv.style.position="static";
   }
 
+  if(q.get("debug")){
+    const d=document.createElement("div");
+    d.style.cssText="position:fixed;left:8px;top:8px;z-index:20;font:10px/1.5 ui-monospace,monospace;"+
+      "color:#9f9;background:rgba(0,0,0,.65);padding:6px 8px;border-radius:6px;pointer-events:none;white-space:pre";
+    document.body.appendChild(d);
+    const tick=()=>{d.textContent=
+      "canvas css "+VIEW.w.toFixed(1)+"x"+VIEW.h.toFixed(1)+" @("+VIEW.left.toFixed(1)+","+VIEW.top.toFixed(1)+")\n"+
+      "canvas px  "+cv.width+"x"+cv.height+"\n"+
+      "innerW/H   "+innerWidth+"x"+innerHeight+"  dpr "+devicePixelRatio+"\n"+
+      "sheet      "+(cv.width/VIEW.w).toFixed(3)+"x  mismatch "+((cv.getBoundingClientRect().height/(innerHeight||1))).toFixed(3);
+      requestAnimationFrame(tick);};
+    tick();
+  }
   window.__state=()=>({...S});
+  window.__map=()=>surfaces.map(s=>{const r=rectOf(s); if(!r) return null;
+    return {id:s.el.id||s.el.className, dom:[+s.el.getBoundingClientRect().width.toFixed(2),+s.el.getBoundingClientRect().height.toFixed(2)],
+            css:[+(2*r.hx*VIEW.h).toFixed(2),+(2*r.hy*VIEW.h).toFixed(2)]};});
   window.__rects=()=>surfaces.map(s=>[s.el.id, rectOf(s).map(v=>+v.toFixed(3))]);
 })();
 </script>

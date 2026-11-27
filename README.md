@@ -317,6 +317,10 @@ it stays crisp above the glass.
 | Glass keeps painting after scrolling out of its panel | the canvas is fixed, the element's rect is not clipped | intersect with the scroll container's box each frame |
 | The sheet blurs its own rim and handles | `backdrop-filter` on the element blurs the canvas beneath it | front canvas above the DOM, blur layer between them |
 | Text behind glass stays perfectly sharp | the canvas is below the DOM and cannot sample it | put the blur above the text and the glass above the blur |
+| Every pane is 15–20% too large and drifts up on iOS, fine on desktop | the surface mapping divides by `innerWidth`/`innerHeight` while the `position:fixed` canvas follows the layout viewport — the two disagree once Safari's toolbars are showing | map every surface through the **canvas's own `getBoundingClientRect()`** (`VIEW`), never through the window |
+| Whole canvas looks soft / stair-stepped next to crisp text | DPR capped below `devicePixelRatio` (2.5 on a 3× phone), so the browser upscales the canvas 1.2× | render at `min(devicePixelRatio, 3)`, bounded by a ~6M-pixel budget per canvas |
+| Small controls read as a hollow doubled ring | `bevelW` capped at `0.45 × shortSide`: on a 22px bead the two bevels (2 × 9.9px) meet in the middle and the plateau vanishes | cap at `0.30 × shortSide` — the plateau always survives, so the bead is a capsule, not a donut |
+| A hard-edged tinted rectangle sits inside the sheet | the blur layer is composited even at frost 0, and its radius (22px) need not match the panel's (26px) | switch `backdrop-filter` off entirely below ~2% frost; set the layer's radius from the panel's computed style |
 
 ---
 
@@ -343,6 +347,10 @@ almost right, which is worse than broken.
 
 Verification habits that paid for themselves here:
 
+- `?debug=1` prints the canvas box, the window box and the effective scale — the fastest way to see a
+  viewport disagreement on a device you cannot attach a debugger to.
+- `window.__map()` returns every surface as `{dom, css}`: the DOM size and the size the shader will
+  draw. They must agree to two decimals; if they do not, the mapping is wrong, not the material.
 - `?still=1` renders one frame — cheap for screenshots and for comparing two settings.
 - Read back computed values (opacity, filter, knob offsets) instead of eyeballing a screenshot;
   transitions make an immediate read lie.
@@ -366,7 +374,7 @@ Every knob is exposed both in the drawer and as a query parameter.
 | `ca` | 0–1 | 0.42 | dispersion / rim tint |
 | `aa`,`ai` | 0–360°, 0–3.5 | 62°, 0.75 | key light angle and intensity |
 | `ba`,`bi` | 0–360°, 0–3.5 | 232°, 0.45 | fill light angle and intensity |
-| `dpr` | 0.75–3 | 2–2.5 | render scale (lower it on slow machines) |
+| `dpr` | 0.75–4 | `min(devicePixelRatio, 3)` | render scale (lower it on slow machines) |
 | `still` | flag | — | draw one frame and stop |
 | `lite` | flag | — | disable CSS backdrop filters (software rendering) |
 | `recede` | 0–8 px | 0.3 | blur applied to the card behind an open sheet |
