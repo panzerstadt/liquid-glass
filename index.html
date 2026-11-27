@@ -1,0 +1,683 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Liquid Glass — a slab, not a blur</title>
+<style>
+:root{
+  --txt:#f4f5f8; --dim:rgba(244,245,248,.66); --line:rgba(255,255,255,.20);
+  --mono:ui-monospace,SFMono-Regular,Menlo,monospace;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;overflow:hidden}
+body{background:#06060a;color:var(--txt);font:14px/1.5 var(--sans);-webkit-font-smoothing:antialiased}
+#gl{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:0}
+/* the front canvas carries the sheet's own glass, above the DOM so it is never blurred by it */
+#glf{position:fixed;inset:0;width:100%;height:100%;display:block;z-index:8;pointer-events:none}
+/* blurs whatever is painted beneath the sheet — only when a second panel is actually under it */
+#frost{position:fixed;z-index:7;pointer-events:none;border-radius:22px;opacity:0;
+  transition:opacity .2s ease;backdrop-filter:blur(var(--sheet-blur,1.4px)) saturate(1.04);
+  -webkit-backdrop-filter:blur(var(--sheet-blur,1.4px)) saturate(1.04)}
+
+/* ---------- chrome ---------- */
+.brand{position:fixed;left:26px;top:22px;z-index:5;display:flex;align-items:center;gap:10px}
+.brand b{font-weight:600;letter-spacing:.01em}
+.brand span{font:10.5px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--dim)}
+
+.hero{position:fixed;right:26px;bottom:26px;z-index:4;max-width:min(40ch,42vw);pointer-events:none;text-align:right;
+  text-shadow:0 2px 24px rgba(0,0,0,.55)}
+.hero h1{font:400 clamp(28px,4.2vw,52px)/1.06 var(--sans);letter-spacing:-.02em;margin:0 0 12px}
+.hero p{margin:0 0 0 auto;color:rgba(255,255,255,.84);font-size:15px;max-width:36ch}
+
+/* ---------- settings button + drawer ---------- */
+.hamb{position:fixed;left:22px;bottom:22px;z-index:10;width:56px;height:56px;border-radius:50%;
+  display:grid;place-items:center;color:#fff;background:transparent;border:0;cursor:pointer;
+  text-shadow:0 1px 4px rgba(0,0,0,.5)}
+.hamb:focus-visible{outline:2px solid #fff;outline-offset:3px}
+
+/* ---------- explainer ---------- */
+.blurb{position:fixed;right:22px;top:22px;z-index:6;width:330px;padding:20px 20px 18px;border-radius:20px;
+  background:transparent;font-size:12.5px;line-height:1.62}
+.blurb h2{margin:0 0 8px;font:600 11px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--dim)}
+.blurb p{margin:0 0 9px;color:rgba(255,255,255,.86)}
+.blurb p:last-child{margin-bottom:0}
+.blurb code{font:11px/1.5 var(--mono);background:rgba(255,255,255,.10);padding:1px 5px;border-radius:4px}
+
+/* ---------- glass sidebar ---------- */
+.panel{position:fixed;left:22px;top:76px;bottom:92px;width:306px;z-index:9;overflow:auto;
+  transform:translateX(calc(-100% - 40px));transition:transform .28s cubic-bezier(.2,.7,.2,1);
+  padding:20px 18px 16px;border-radius:26px;background:transparent;
+  display:flex;flex-direction:column;gap:11px;scrollbar-width:none}
+.panel::-webkit-scrollbar{display:none}
+body.open .panel{transform:none}
+body.noanim .panel,body.noanim .panel *{transition:none!important}
+  body.noanim #frost,body.noanim .blurb{transition:none!important}
+.panel label,.panel output,.panel .config{text-shadow:0 1px 3px rgba(0,0,0,.6)}
+.panel .grp{display:flex;flex-direction:column;gap:4px}
+.panel .top{display:flex;align-items:baseline;justify-content:space-between}
+.panel label{font:10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:rgba(255,255,255,.62)}
+.panel output{font:11px/1 var(--mono);color:#fff}
+.panel .row{display:flex;gap:10px}
+.panel .row .grp{flex:1}
+
+/* iOS-ish glass slider */
+input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:22px;background:transparent;cursor:pointer}
+input[type=range]::-webkit-slider-runnable-track{height:6px;border-radius:99px;
+  background:linear-gradient(90deg,
+    rgba(255,255,255,.94) 0 calc(var(--p,50%) - .5px),
+    rgba(255,255,255,.20) calc(var(--p,50%) + .5px) 100%);
+  box-shadow:inset 0 1px 2px rgba(0,0,0,.30),inset 0 0 0 .5px rgba(255,255,255,.22)}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:22px;height:22px;margin-top:-8px;
+  border-radius:50%;background:transparent;border:0;box-shadow:none}
+input[type=range]::-moz-range-track{height:6px;border-radius:99px;background:rgba(255,255,255,.2)}
+.slider{position:relative}
+.slider .knob{position:absolute;top:44%;width:34px;height:22px;margin-top:-11px;border-radius:99px;
+  left:var(--p,50%);transform:translateX(-50%);pointer-events:none;
+  z-index:3}
+.slider .knob::after{content:'';position:absolute;left:50%;top:50%;width:7px;height:7px;
+  margin:-3.5px 0 0 -3.5px;border-radius:50%;background:#fff;
+  box-shadow:0 0 3px rgba(255,255,255,.75),0 0 0 .5px rgba(0,0,0,.10)}
+input[type=range]::-moz-range-thumb{width:20px;height:20px;border-radius:50%;background:#f7f8fb;border:none;
+  box-shadow:0 1px 3px rgba(0,0,0,.35)}
+
+.thumbs{display:flex;gap:8px}
+.thumbs button{width:42px;height:27px;border-radius:9px;border:1px solid rgba(255,255,255,.24);
+  background-size:cover;background-position:center;cursor:pointer;padding:0;
+  box-shadow:0 2px 8px rgba(0,0,0,.25)}
+.thumbs button.on{border-color:#fff;box-shadow:0 0 0 1.5px rgba(255,255,255,.9),0 2px 10px rgba(0,0,0,.3)}
+.thumbs button.grid{background:linear-gradient(135deg,#2a2340,#0e2a30)}
+
+.config{margin-top:auto;padding-top:12px;border-top:1px solid rgba(255,255,255,.14);
+  font:10.5px/1.55 var(--mono);color:rgba(255,255,255,.72);word-break:break-word}
+.config button{margin-top:8px;width:100%;padding:9px;border-radius:10px;cursor:pointer;
+  background:transparent;border:0;color:#fff;
+  font:10.5px/1 var(--mono);letter-spacing:.08em;text-transform:uppercase}
+.config button:active{transform:scale(.99)}
+
+/* capture/debug mode: drop the layered backdrop blur (expensive to composite in software GL) */
+body.lite .blurb{backdrop-filter:none!important;-webkit-backdrop-filter:none!important;background:rgba(12,12,16,.72)}
+body.lite #frost{backdrop-filter:none!important;-webkit-backdrop-filter:none!important}
+
+@media(max-width:900px){
+  /* mobile is a scrollable sheet of content over a fixed backdrop: nothing is hidden */
+  html,body{height:auto;overflow-y:auto;overflow-x:hidden;overscroll-behavior-y:none}
+  .brand{left:16px;top:16px}
+  .hamb{bottom:16px;left:16px;width:52px;height:52px}
+  .panel{left:12px;right:12px;top:auto;bottom:78px;width:auto;max-height:56vh;border-radius:22px;
+    transform:translateY(calc(100% + 100px))}
+  /* no backdrop-filter here: everything the sheet would blur — its own rim, its bevels and the
+     shader-drawn knobs — lives in the canvas underneath it, so a backdrop blur softens the material
+     itself. The card behind carries its own blur instead (see body.open .blurb). */
+  body.open .panel{transform:none}
+  body.noanim .panel,body.noanim .panel *{transition:none!important}
+  body.noanim #frost,body.noanim .blurb{transition:none!important}
+  /* DOM order is brand → blurb → hero; on mobile it reads brand → hero → blurb */
+  body{display:flex;flex-direction:column}
+  .hero{position:relative;inset:auto;z-index:4;order:1;margin:66px 16px 0;max-width:none;text-align:left;
+    text-shadow:0 2px 18px rgba(0,0,0,.5)}
+  .hero h1{font-size:27px;margin-bottom:10px}
+  .hero p{display:block;margin:0;max-width:34ch;font-size:14.5px;text-align:left}
+  .blurb{position:relative;inset:auto;z-index:6;order:2;width:auto;margin:22px 12px 96px;padding:18px 16px;
+    font-size:13px;text-align:left;transition:opacity .22s ease,transform .22s cubic-bezier(.4,0,.2,1),filter .22s ease}
+  /* one canvas sits behind all the DOM, so glass-over-glass cannot blur the text underneath:
+     when the sheet comes up the card steps back — a little smaller, a little darker — instead of vanishing */
+  body.open .blurb{opacity:.5;filter:blur(var(--recede-blur,0.3px));transform:scale(.96) translateY(-10px);
+    pointer-events:none;transform-origin:50% 0%}
+}
+</style></head><body>
+<canvas id="gl"></canvas>
+<canvas id="glf"></canvas>
+<div id="frost"></div>
+
+<div class="brand"><b>Liquid Glass</b><span>webgl · two lights</span></div>
+
+<section class="blurb" id="blurb">
+  <h2>How this was made</h2>
+  <p>A fragment shader draws the backdrop and every pane of glass. Each surface is a rounded-rect
+  distance field: the interior is a flat <b>plateau</b> where displacement is exactly zero, and a
+  fixed-width <b>bevel</b> at the rim does all the bending. The bevel profile is
+  <code>sin(πs)^curve</code>, so the join into the plateau is soft instead of a crease — that is why
+  nothing streaks down the middle of a long pill.</p>
+  <p><b>Frost is a flat plane, not a function of the shape.</b> Constant kernel radius, constant mip
+  level, sampled at the undisplaced coordinate: a 16-tap disc over a pre-blurred level. It also drains
+  chroma (<code>√frost·0.62 + 0.22·frost</code> toward luma) and adds a scatter lift on the lit side,
+  because real frosting greys and brightens as much as it blurs.</p>
+  <p>Two movable lights give the rim its gradient and glints; the highlight is tinted with the
+  backdrop's own colour plus a small radial <b>dispersion</b> — offset from the optical centre, never a
+  scaled coordinate, which is what used to paint rainbow edges.</p>
+  <p>The sheet's glass lives on a second canvas <em>above</em> the page, with a blur layer between the
+  two, so it can frost the panel behind it without softening its own rim, bevels and handles.</p>
+</section>
+
+<div class="panel" id="panel">
+  <div class="grp">
+    <div class="top"><label>background</label></div>
+    <div class="thumbs" id="thumbs">
+      <button class="grid on" data-bg="grid"></button>
+      <button data-bg="img/bg1.jpg" style="background-image:url(img/bg1.jpg)"></button>
+      <button data-bg="img/bg2.jpg" style="background-image:url(img/bg2.jpg)"></button>
+      <button data-bg="img/bg3.jpg" style="background-image:url(img/bg3.jpg)"></button>
+      <button data-bg="img/bg4.jpg" style="background-image:url(img/bg4.jpg)"></button>
+    </div>
+  </div>
+
+  <div class="grp"><div class="top"><label>rim</label><output id="o-rim">2.0px</output></div>
+    <input id="rim" type="range" min="1" max="8" step="0.5" value="2"></div>
+
+  <div class="grp"><div class="top"><label>depth</label><output id="o-dep">0.074</output></div>
+    <input id="dep" type="range" min="0" max="0.14" step="0.002" value="0.074"></div>
+
+  <div class="grp"><div class="top"><label>plateau</label><output id="o-bevel">29px</output></div>
+    <input id="bev" type="range" min="4" max="90" step="1" value="29"></div>
+
+  <div class="grp"><div class="top"><label>curve</label><output id="o-cur">2.00</output></div>
+    <input id="cur" type="range" min="1" max="4" step="0.25" value="2"></div>
+
+  <div class="grp"><div class="top"><label>frost</label><output id="o-fr">0%</output></div>
+    <input id="fr" type="range" min="0" max="1" step="0.02" value="0"></div>
+
+  <div class="grp"><div class="top"><label>fill</label><output id="o-fil">4.5%</output></div>
+    <input id="fil" type="range" min="0" max="0.30" step="0.005" value="0.045"></div>
+
+  <div class="grp"><div class="top"><label>tint</label><output id="o-ca">42%</output></div>
+    <input id="ca" type="range" min="0" max="1" step="0.02" value="0.42"></div>
+
+  <div class="row">
+    <div class="grp"><div class="top"><label>light A°</label><output id="o-aa">62</output></div>
+      <input id="aa" type="range" min="0" max="360" step="1" value="62"></div>
+    <div class="grp"><div class="top"><label>A×</label><output id="o-ai">0.75</output></div>
+      <input id="ai" type="range" min="0" max="3.5" step="0.05" value="0.75"></div>
+  </div>
+  <div class="row">
+    <div class="grp"><div class="top"><label>light B°</label><output id="o-ba">232</output></div>
+      <input id="ba" type="range" min="0" max="360" step="1" value="232"></div>
+    <div class="grp"><div class="top"><label>B×</label><output id="o-bi">0.45</output></div>
+      <input id="bi" type="range" min="0" max="3.5" step="0.05" value="0.45"></div>
+  </div>
+
+  <div class="config"><span id="cfg">—</span>
+    <button id="copy">copy settings</button>
+  </div>
+</div>
+
+<button class="hamb" id="hamb" aria-label="settings">
+  <svg width="20" height="14" viewBox="0 0 20 14" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round">
+    <path d="M1 1h18M1 7h18M1 13h18"/></svg>
+</button>
+
+<div class="hero">
+  <h1>A slab of glass, not a blur.</h1>
+  <p>Four bevels, two lights and a plateau. Move the pointer: the backdrop shifts and the material bends with it.</p>
+</div>
+<script type="x-shader/x-fragment" id="fs-src">#version 300 es
+precision highp float;
+uniform vec2 uRes; uniform float uTime; uniform vec2 uPtr;
+uniform float uDepth, uPxP, uRimPx, uFrost, uFrostPx, uBevelPx, uCurve;
+uniform vec2 uLA, uLB; uniform float uIA, uIB;
+uniform float uFrostLod; uniform float uCA;
+uniform vec4 uPanel;       /* cx, cy, hx, hy of THIS surface, p-space; z<=0 = hidden */
+uniform float uPanelR;
+uniform float uPanelA;   /* surface opacity, so the glass can fade with its DOM element */
+uniform float uOverlay;  /* 1 = front canvas: output glass only, with alpha */
+uniform float uAlpha;
+uniform float uFill;       /* base fill of the material: 0 = pure refraction */
+uniform sampler2D uTex; uniform float uUseTex, uTexAspect; uniform vec2 uPar;
+out vec4 outColor;
+
+float sdr(vec2 p, vec2 b, float r){
+  vec2 q=abs(p)-b+r;
+  return length(max(q,0.0))+min(max(q.x,q.y),0.0)-r;
+}
+float gridAA(vec2 p, float cell, float blur){
+  vec2 gp=p*cell;
+  vec2 dl=0.5-abs(fract(gp)-0.5);
+  float aa=max(fwidth(gp.x),fwidth(gp.y));
+  float w=0.006+blur*cell*0.18;
+  return max(1.0-smoothstep(w,w+aa*1.6,dl.x),
+             1.0-smoothstep(w,w+aa*1.6,dl.y));
+}
+vec2 coverUV(vec2 uv){
+  float ca = uRes.x/uRes.y;
+  float ta = max(uTexAspect,0.0001);
+  vec2 sc = (ca>ta) ? vec2(1.0, ta/ca) : vec2(ca/ta, 1.0);
+  /* gl_FragCoord is bottom-up, textures are top-down: flip v or the photo renders upside down */
+  vec2 t2=vec2((uv.x-0.5)*sc.x+0.5, 0.5-(uv.y-0.5)*sc.y);
+  return clamp(t2, 0.001, 0.999);
+}
+vec3 bgTex(vec2 uv, float lod){
+  vec2 t2 = coverUV(uv+uPar);
+  vec3 c = textureLod(uTex,t2,lod).rgb;   /* explicit LOD: displaced uv breaks implicit derivatives */
+  return c * (1.0 - 0.30*smoothstep(1.15,0.30,length(uv-0.5)));
+}
+vec3 bg(vec2 uv, float gb){
+  if(uUseTex>0.5) return bgTex(uv,gb);  /* gb was dropped: every frost tap sampled a sharp mip */
+  vec2 u2 = uv + uPar;                       /* parallax: the backdrop slides with the pointer */
+  vec2 p=(u2-0.5)*vec2(uRes.x/uRes.y,1.0);
+  float t=uTime*0.20;
+  vec3 c=vec3(0.022,0.022,0.033);
+  c+=vec3(0.40,0.26,0.62)*0.55*exp(-3.0*length(p-vec2(-0.58+0.07*sin(t),0.36)));
+  c+=vec3(0.13,0.46,0.62)*0.46*exp(-3.2*length(p-vec2(0.66,0.05+0.05*cos(t*1.3))));
+  c+=vec3(0.72,0.46,0.17)*0.42*exp(-3.6*length(p-vec2(0.10,-0.74)));
+  c+=vec3(0.16)*gridAA(p,16.0,gb);
+  float aa=max(fwidth(p.y)*1.6,0.0009);
+  c+=vec3(0.34,0.38,0.44)*((1.0-smoothstep(0.0016,0.0016+aa,abs(p.y-0.30)))
+                          +(1.0-smoothstep(0.0016,0.0016+aa,abs(p.y+0.30))));
+  return c;
+}
+vec3 bgFrost(vec2 uv, float rad, float lod){
+  /* a real blur on a flat plane: an isotropic disc kernel in screen space.
+     Sampling a coarse mip instead produces visible bilinear facets — each texel of a 50x28 level
+     becomes a big triangle-interpolated quad, which is what read as "seams" in the frosted panel. */
+  if(rad<=0.0002) return bg(uv,0.0);
+  /* mild fixed mip kills detail finer than ~4px, then a 16-tap golden-angle disc averages the rest:
+     coarse mips alone facet, taps alone rosette on high-contrast detail, together they read as frosted */
+  float ilod=clamp(log2(max(rad*uRes.y,1.0))-1.9,0.0,3.5);
+  vec3 s=bg(uv,ilod);
+  for(int i=0;i<15;i++){
+    float fi=float(i)+0.5;
+    float a=fi*2.39996;
+    float rr=sqrt(fi/15.0)*rad;
+    float asp=uRes.x/uRes.y;
+    s+=bg(uv+vec2(cos(a)/asp,sin(a))*rr,ilod);
+  }
+  return s/16.0;
+}
+vec3 glass(vec2 uv, vec2 p, vec2 c, vec2 b, float r, float d, float rimPx, float refW){
+  float a=uRes.x/uRes.y;
+  float rimW=rimPx*uPxP;
+  float tr=clamp(-d/rimW,0.0,1.0);
+  float tf=clamp(-d/refW,0.0,1.0);
+  vec2 q=(p-c)/b;
+
+  /* Normal from the SDF is only trustworthy near an edge. Deeper inside a long shape the
+     nearest-edge field has a medial axis running down its spine, and the gradient flips across
+     it — that flip is the seam. So the normal term is confined to the rim zone. */
+  /* ---- tray model ----
+     Flat plateau in the middle, fixed-width fillet at the rim. Displacement is the gradient of a
+     HEIGHT FIELD (plateau + fillet), not of the distance field, so the weight is exactly zero on
+     the medial axis and the spine can never print. This is what a baked displacement map does:
+     neutral grey in the middle, values only inside the rim band. */
+  float shortSide=min(b.x,b.y);
+  float bevelW=min(uBevelPx*uPxP, shortSide*0.45);   /* where the plateau ends */
+  vec2 pl=p-c;
+  float eo=bevelW*0.45;
+  float dSmooth=(sdr(pl,b,r)
+    +sdr(pl+vec2(eo,0.0),b,r)+sdr(pl-vec2(eo,0.0),b,r)
+    +sdr(pl+vec2(0.0,eo),b,r)+sdr(pl-vec2(0.0,eo),b,r))*0.2;
+  float s=clamp(-dSmooth/bevelW,0.0,1.0);        /* 0 at the outer edge, 1 at the plateau */
+  /* exponent > 1 makes the profile leave the plateau with zero slope, so the join is C1/C2
+     instead of a crease: 1 = linear join, 2 = quadratic, 3 = cubic, 4 = very soft */
+  float prof=pow(max(sin(s*3.14159265),0.0),uCurve);
+  /* keep the map monotonic: max slope of sin^k is ~k, so cap the push by bevelW/k.
+     Exceeding this is what produced the crinkle/fold just inside the rim. */
+  float push=min(uDepth,bevelW*0.26/max(uCurve,1.0))*prof;
+
+  vec2 e=vec2(max(0.0026,fwidth(p.x)*2.0),0.0);
+  vec2 n=normalize(vec2(sdr(pl+e.xy,b,r)-sdr(pl-e.xy,b,r),
+                        sdr(pl+e.yx,b,r)-sdr(pl-e.yx,b,r))+vec2(1e-6));
+  vec2 duv=vec2(-n.x/a,-n.y)*push;
+
+  vec2 base=uv+duv;
+  /* frost acts on a flat plane: constant kernel radius and a constant mip level across the whole
+     surface. Scaling either by the distance field makes the blur (and the trilinear mip transition)
+     follow the curvature — that is what drew bands and seams along the bevel. */
+  float fr=uFrost*uFrostPx*uPxP;
+  vec3 o;
+  /* dispersion is radial about the optical centre — scaling the uv about the origin (0,0)
+     instead is what produced the rainbow streaks along the canvas edges */
+  vec2 cab=(base-0.5)*0.0018;
+  if(uFrost>0.05){
+    /* flat plane: the blurred backdrop is sampled at the UNDISPLACED uv, so no part of the
+       frost depends on the bevel/plateau field — the curvature only refines the rim and the
+       unfrosted case. Displacing the sample point is what smeared the blur along the bevel. */
+    vec3 c0=bgFrost(uv,fr,uFrost*uFrostLod);
+    float fringe=(bg(base+cab,0.0).r-bg(base-cab,0.0).b);
+    o=c0+vec3(fringe*0.35,0.0,-fringe*0.35)*(1.0-uFrost*0.7);  /* sharp fringing fights frost */
+  }else if(uDepth>0.001){
+    o.r=bg(base+cab,0.0).r; o.g=bg(base,0.0).g; o.b=bg(base-cab,0.0).b;
+  }else{
+    o=bg(base,0.0);
+  }
+  /* frost does two things at once, so it is one slider:
+     - chroma drains (scattering averages wavelengths), following a curve tuned by eye
+     - the pane picks up light and brightens where it faces a lamp, not just at the rim */
+  float frostN=clamp(uFrost,0.0,1.0);
+  float lum=dot(o,vec3(0.2126,0.7152,0.0722));
+  o=mix(o,vec3(lum),clamp(sqrt(frostN)*0.62+0.22*frostN,0.0,1.0));
+  /* the scatter shading must NOT use the SDF normal: for a rectangle the nearest-edge field has
+     bisector discontinuities running corner-to-corner, which printed as an X / hourglass across the
+     frosted panel. A linear ramp across the pane is smooth and reads the same. */
+  vec2 np=clamp(pl/b,-1.0,1.0);
+  vec2 L2=normalize(uLA+vec2(1e-5));
+  float faceLit=0.55+0.45*clamp(dot(np,L2),-1.0,1.0);
+  o+=vec3(0.060,0.063,0.072)*frostN*1.25*faceLit;
+  o=mix(o,vec3(0.87,0.91,1.0),uFill*(1.0+0.55*tf)*(1.0-0.45*uFrost));
+  float key=pow(max(dot(n,uLA),0.0),1.35)*1.45*uIA;
+  float sec=pow(max(dot(n,uLB),0.0),1.20)*0.95*uIB;
+  float lit=key+sec+0.14;
+  float lip =exp(-pow((tr-0.06)/0.22,2.0));
+  float body=smoothstep(0.05,0.40,tr)*(1.0-smoothstep(0.62,1.0,tr));
+  float icat=exp(-pow((tr-0.80)/0.20,2.0))*smoothstep(1.02,0.72,tr);
+  float rim =lip*0.68+body*0.34+icat*0.16;
+  float corner=1.0-abs(abs(n.x)-abs(n.y));
+  rim*=1.0+0.45*corner*corner;
+  float glint=pow(max(dot(n,uLA),0.0),14.0)*uIA+pow(max(dot(n,uLB),0.0),14.0)*uIB*0.6;
+  float hiBase=rim*lit*1.9+glint*smoothstep(0.62,0.10,tr)*0.9;
+  float spread=1.0+0.14*uCA;
+  vec3 rimTint=mix(vec3(0.97,0.98,1.0), clamp(o*2.0,0.0,1.0), 0.75*uCA);
+  o+=rimTint*vec3(1.0-exp(-hiBase*spread),1.0-exp(-hiBase),1.0-exp(-hiBase/spread));
+  o-=vec3(0.09)*body*max(-dot(n,uLA),0.0);
+  o*=mix(0.97,1.0,tf);
+  o+=vec3(0.030)*smoothstep(1.0,-0.4,q.y);
+  return o;
+}
+void main(){
+  vec2 uv=gl_FragCoord.xy/uRes;
+  float a=uRes.x/uRes.y;
+  vec2 p=(uv-0.5)*vec2(a,1.0);
+  vec3 col=bg(uv,0.0);
+  float outA=1.0;
+
+  /* one surface per draw call (scissored), so the shader never loops over surfaces: each pixel
+     evaluates the material at most once, and layering is plain painter's order in JS */
+  if(uPanel.z>0.0){
+    vec2 c=uPanel.xy, b=uPanel.zw;
+    float r=min(uPanelR, min(b.x,b.y));
+    float d=sdr(p-c,b,r);
+    float aa=max(fwidth(d)*0.8,1e-5);
+    float cov=1.0-smoothstep(-aa,aa,d);
+    /* the draw is scissored to the bounding box: discard the corners so the sharp backdrop
+       computed here cannot patch over the surface already painted underneath */
+    if(cov<=0.002) discard;
+    vec3 gc=glass(uv,p,c,b,r,d,uRimPx,min(b.x,b.y)*1.4);
+    if(uOverlay>0.5){ col=gc; outA=cov*uAlpha; }        /* front canvas: glass only, let the
+                                                          blurred layer below show through */
+    else { col=mix(col,gc,cov*uPanelA); }
+  }
+  outColor=vec4(col,outA);
+}
+</script>
+<script>
+(function(){
+  const cv=document.getElementById("gl");
+  const q=new URLSearchParams(location.search);
+  const sb=parseFloat(q.get("sheet"));
+  if(isFinite(sb)) document.documentElement.style.setProperty('--sheet-blur', Math.max(0,Math.min(sb,10))+'px');
+  const rb=parseFloat(q.get("recede"));
+  if(isFinite(rb)) document.documentElement.style.setProperty('--recede-blur', Math.max(0,Math.min(rb,8))+'px');
+  if(q.get("lite")) document.body.classList.add("lite");
+  if(q.get("still")||q.get("snap")) document.body.classList.add("noanim");
+  const VS="#version 300 es\nin vec2 a; void main(){ gl_Position=vec4(a,0.,1.); }";
+  const FS=document.getElementById("fs-src").textContent;
+
+  /* one renderer per canvas: the back one paints the world under the DOM, the front one paints the
+     sheet's glass above it (so a CSS blur between them can soften what is behind the sheet without
+     touching the sheet itself) */
+  function mkGL(canvas, overlay){
+    const g=canvas.getContext("webgl2",{antialias:false,alpha:!!overlay,premultipliedAlpha:false,
+        powerPreference:"high-performance",preserveDrawingBuffer:!!q.get("pdb")});
+    if(!g) return null;
+    const sh=(ty,s)=>{const o=g.createShader(ty);g.shaderSource(o,s);g.compileShader(o);
+      if(!g.getShaderParameter(o,g.COMPILE_STATUS)) throw new Error(g.getShaderInfoLog(o));return o;};
+    const prog=g.createProgram();
+    g.attachShader(prog,sh(g.VERTEX_SHADER,VS));
+    g.attachShader(prog,sh(g.FRAGMENT_SHADER,FS));
+    g.linkProgram(prog);
+    if(!g.getProgramParameter(prog,g.LINK_STATUS)) throw new Error(g.getProgramInfoLog(prog));
+    g.useProgram(prog);
+    const buf=g.createBuffer(); g.bindBuffer(g.ARRAY_BUFFER,buf);
+    g.bufferData(g.ARRAY_BUFFER,new Float32Array([-1,-1,3,-1,-1,3]),g.STATIC_DRAW);
+    const loc=g.getAttribLocation(prog,"a"); g.enableVertexAttribArray(loc);
+    g.vertexAttribPointer(loc,2,g.FLOAT,false,0,0);
+    const U=n=>g.getUniformLocation(prog,n);
+    const Uu={res:U("uRes"),time:U("uTime"),ptr:U("uPtr"),depth:U("uDepth"),pxp:U("uPxP"),
+      rim:U("uRimPx"),frost:U("uFrost"),frostpx:U("uFrostPx"),frostlod:U("uFrostLod"),
+      la:U("uLA"),lb:U("uLB"),ia:U("uIA"),ib:U("uIB"),ca:U("uCA"),
+      tex:U("uTex"),usetex:U("uUseTex"),texasp:U("uTexAspect"),par:U("uPar"),
+      panel:U("uPanel"),panelr:U("uPanelR"),panela:U("uPanelA"),
+      overlay:U("uOverlay"),alpha:U("uAlpha"),fill:U("uFill"),
+      bevel:U("uBevelPx"),curve:U("uCurve")};
+    const tx=g.createTexture();
+    g.bindTexture(g.TEXTURE_2D,tx);
+    g.texImage2D(g.TEXTURE_2D,0,g.RGBA,1,1,0,g.RGBA,g.UNSIGNED_BYTE,new Uint8Array([18,18,24,255]));
+    g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MIN_FILTER,g.LINEAR);
+    g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MAG_FILTER,g.LINEAR);
+    g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_S,g.CLAMP_TO_EDGE);
+    g.texParameteri(g.TEXTURE_2D,g.TEXTURE_WRAP_T,g.CLAMP_TO_EDGE);
+    return {c:canvas,g,U:Uu,tex:tx,overlay:!!overlay};
+  }
+  const back=mkGL(cv,false);
+  if(!back){ document.body.style.background="#0a0a0e"; return; }
+  const gl=back.g, u=back.U, tex=back.tex;
+  const front=mkGL(document.getElementById("glf"),true);
+  const frostEl=document.getElementById("frost");
+  let useTex=0, texAspect=1.7778;
+
+  const S={rim:2.0, dep:0.074, bevel:29, curve:2.0, frost:0.0, fill:0.045, aaDeg:62, ai:0.75, baDeg:232, bi:0.45, ca:0.42};
+  const num=(k,f)=>{const v=parseFloat(q.get(k)); if(isFinite(v)) f(v);};
+  num("rim",v=>S.rim=v); num("dep",v=>S.dep=v); num("bevel",v=>S.bevel=v); num("curve",v=>S.curve=v);
+  num("frost",v=>S.frost=v); num("aa",v=>S.aaDeg=v); num("ai",v=>S.ai=v); num("ba",v=>S.baDeg=v);
+  num("bi",v=>S.bi=v); num("ca",v=>S.ca=v); num("fill",v=>S.fill=v);
+
+  const el=id=>document.getElementById(id);
+  const cfg=()=>`rim ${S.rim.toFixed(1)}px · depth ${S.dep.toFixed(3)} · plateau ${Math.round(S.bevel)}px · `+
+    `curve ${S.curve.toFixed(2)} · frost ${Math.round(S.frost*100)}% · fill ${(S.fill*100).toFixed(1)}% · A ${Math.round(S.aaDeg)}°×${S.ai.toFixed(2)} · `+
+    `B ${Math.round(S.baDeg)}°×${S.bi.toFixed(2)} · tint ${Math.round(S.ca*100)}%`;
+  function sync(){
+    el("o-rim").textContent=S.rim.toFixed(1)+"px";
+    el("o-dep").textContent=S.dep.toFixed(3);
+    el("o-bevel").textContent=Math.round(S.bevel)+"px";
+    el("o-cur").textContent=S.curve.toFixed(2);
+    el("o-fr").textContent=Math.round(S.frost*100)+"%";
+    if(!isFinite(sb)) document.documentElement.style.setProperty('--sheet-blur',(Math.min(S.frost*5,5)).toFixed(2)+'px');
+    el("o-fil").textContent=Math.round(S.fill*1000)/10+"%";
+    el("o-ca").textContent=Math.round(S.ca*100)+"%";
+    el("o-aa").textContent=Math.round(S.aaDeg);
+    el("o-ai").textContent=S.ai.toFixed(2);
+    el("o-ba").textContent=Math.round(S.baDeg);
+    el("o-bi").textContent=S.bi.toFixed(2);
+    el("cfg").textContent=cfg();
+    document.querySelectorAll('.panel input[type=range]').forEach(n=>{
+      const min=+n.min||0, max=+n.max||1, u=((+n.value-min)/(max-min));
+      const wrap=n.parentElement, knob=wrap.querySelector('.knob');
+      /* one expression drives both the fill stop and the knob, measured off the input so a UA
+         margin or inset cannot leave the line ending a couple of px away from the bead */
+      const nr=n.getBoundingClientRect(), wr=wrap.getBoundingClientRect();
+      const inInput=17+(nr.width-34)*u;
+      const centre=(nr.left-wr.left)+inInput;
+      n.style.setProperty('--p', inInput.toFixed(2)+'px');
+      wrap.style.setProperty('--u', u.toFixed(4));
+      if(knob) knob.style.left=centre.toFixed(2)+'px';
+    });
+  }
+  addEventListener("resize",()=>sync());
+  const bind=(id,key)=>{const n=el(id); n.value=S[key]; n.oninput=()=>{S[key]=parseFloat(n.value); sync();};};
+  bind("rim","rim"); bind("dep","dep"); bind("bev","bevel"); bind("cur","curve"); bind("fil","fill");
+  bind("fr","frost"); bind("ca","ca"); bind("aa","aaDeg"); bind("ai","ai"); bind("ba","baDeg"); bind("bi","bi");
+  const hamb=document.getElementById("hamb");
+  hamb.onclick=()=>document.body.classList.toggle("open");
+  if(innerWidth>900) document.body.classList.add("open");   /* desktop starts with the drawer open */
+  addEventListener("keydown",e=>{ if(e.key==="Escape") document.body.classList.remove("open"); });
+  el("copy").onclick=async()=>{try{await navigator.clipboard.writeText(cfg());
+    el("copy").textContent="copied"; setTimeout(()=>el("copy").textContent="copy settings",1300);}catch(e){}};
+  sync();
+
+  /* backdrop */
+  function setBg(src){
+    if(src==="grid"){ useTex=0; return; }
+    const im=new Image();
+    im.onload=()=>{
+      for(const R of [back,front]){
+        if(!R) continue;
+        const g=R.g;
+        g.bindTexture(g.TEXTURE_2D,R.tex);
+        g.pixelStorei(g.UNPACK_FLIP_Y_WEBGL,false);
+        g.texImage2D(g.TEXTURE_2D,0,g.RGBA,g.RGBA,g.UNSIGNED_BYTE,im);
+        g.texParameteri(g.TEXTURE_2D,g.TEXTURE_MIN_FILTER,g.LINEAR_MIPMAP_LINEAR);
+        g.generateMipmap(g.TEXTURE_2D);
+      }
+      texAspect=im.width/im.height; useTex=1;
+      if(window.__draw && still) window.__draw(performance.now());
+    };
+    im.src=src;
+  }
+  document.querySelectorAll("#thumbs button").forEach(b=>b.onclick=()=>{
+    document.querySelectorAll("#thumbs button").forEach(x=>x.classList.remove("on"));
+    b.classList.add("on"); setBg(b.dataset.bg);
+  });
+  const startBg=q.get("bg");
+  if(startBg){ const btn=[...document.querySelectorAll("#thumbs button")].find(b=>b.dataset.bg.endsWith(startBg));
+    if(btn) btn.click(); } else { setBg("img/bg2.jpg"); document.querySelectorAll("#thumbs button")[2].classList.add("on"); }
+
+  let ptr=[0.5,0.5];
+  addEventListener("pointermove",e=>{ptr=[e.clientX/innerWidth,1-e.clientY/innerHeight];},{passive:true});
+
+  /* every range gets a wrapper + a knob element; the knob is pure geometry, the shader
+     paints its glass (the native thumb is transparent but still draggable) */
+  document.querySelectorAll('.panel input[type=range]').forEach(n=>{
+    const wrap=document.createElement('div'); wrap.className='slider';
+    n.parentNode.insertBefore(wrap,n); wrap.appendChild(n);
+    const k=document.createElement('i'); k.className='knob'; wrap.appendChild(k);
+  });
+
+  const isOpen=()=>document.body.classList.contains("open");
+  /* painted in array order; this must follow the CSS stacking order, because on mobile the
+     settings sheet slides up over the blurb (panel z7 > blurb z6) and its glass has to land on top.
+     Children of the panel come after the panel itself, and the hamburger is last of all (z9). */
+  const panelEl=document.getElementById("panel"), blurbEl=document.getElementById("blurb");
+  /* what is painted under the DOM, and what is painted above it (the sheet and its controls) */
+  const backSurfaces=[ {el:blurbEl, r:20, open:()=>true} ];
+  const frontSurfaces=[
+    {el:panelEl, r:26, open:isOpen},
+    {el:document.getElementById("copy"), r:10, open:isOpen, clip:panelEl},
+    ...[...document.querySelectorAll('.panel .knob')].map(el=>({el, r:11, open:isOpen, clip:panelEl})),
+    {el:document.getElementById("hamb"), r:28, open:()=>true}
+  ];
+  const surfaces=[...backSurfaces,...frontSurfaces];
+  sync();   /* knobs exist now: place them (the first sync ran before they were created) */
+  function rectOf(s){
+    if(!s.open()) return null;
+    const r=s.el.getBoundingClientRect();
+    if(r.width<2||r.height<2) return null;
+    const W=cv.width, H=cv.height, a=W/H;
+    const cx=((r.left+r.width/2)/innerWidth-0.5)*a, cy=1-(r.top+r.height/2)/innerHeight-0.5;
+    const hx=(r.width/2/innerWidth)*a, hy=r.height/2/innerHeight;
+    /* device-pixel box for the scissor (origin bottom-left) */
+    const sx=W/innerWidth, sy=H/innerHeight;
+    const box={x0:r.left*sx, x1:(r.left+r.width)*sx,
+               y0:H-(r.top+r.height)*sy, y1:H-r.top*sy};
+    const op=parseFloat(getComputedStyle(s.el).opacity);
+    if(!(op>0.01)) return null;
+    return {cx,cy,hx,hy,r:s.r/innerHeight,box,clip:s.clip,a:op};
+  }
+  function boxOf(el){
+    const r=el.getBoundingClientRect();
+    const W=cv.width, H=cv.height, sx=W/innerWidth, sy=H/innerHeight;
+    return {x0:r.left*sx, x1:(r.left+r.width)*sx, y0:H-(r.top+r.height)*sy, y1:H-r.top*sy};
+  }
+  function resize(){
+    const want=parseFloat(q.get("dpr"));
+    const dpr=isFinite(want)?Math.max(0.75,Math.min(want,3)):Math.max(2,Math.min(devicePixelRatio||1,2.5));
+    const w=Math.round(innerWidth*dpr), h=Math.round(innerHeight*dpr);
+    for(const R of [back,front]){
+      if(!R) continue;
+      if(R.c.width!==w||R.c.height!==h){R.c.width=w;R.c.height=h;}
+      R.g.viewport(0,0,w,h);
+    }
+  }
+  addEventListener("resize",resize); resize();
+
+  const still=!!q.get("still");
+  window.__still=still;
+  const t0=performance.now();
+  function setCommon(R, now, dpr){
+    const g=R.g, U=R.U;
+    g.uniform2f(U.res,R.c.width,R.c.height);
+    g.uniform1f(U.time,(now-t0)/1000);
+    g.uniform2f(U.ptr,ptr[0],ptr[1]);
+    g.uniform1f(U.depth,S.dep);
+    g.uniform1f(U.pxp,1.0/R.c.clientHeight);
+    g.uniform1f(U.rim,S.rim);
+    g.uniform1f(U.bevel,S.bevel);
+    g.uniform1f(U.curve,S.curve);
+    g.uniform1f(U.frost,S.frost);
+    g.uniform1f(U.frostpx,45.0);
+    g.uniform1f(U.frostlod,7.0);
+    g.uniform1f(U.ca,S.ca);
+    g.uniform2f(U.la,Math.cos(S.aaDeg*Math.PI/180),Math.sin(S.aaDeg*Math.PI/180));
+    g.uniform2f(U.lb,Math.cos(S.baDeg*Math.PI/180),Math.sin(S.baDeg*Math.PI/180));
+    g.uniform1f(U.ia,S.ai); g.uniform1f(U.ib,S.bi);
+    g.activeTexture(g.TEXTURE0); g.bindTexture(g.TEXTURE_2D,R.tex);
+    g.uniform1i(U.tex,0);
+    g.uniform1f(U.usetex,useTex);
+    g.uniform1f(U.texasp,texAspect);
+    g.uniform2f(U.par,(ptr[0]-0.5)*0.035,(ptr[1]-0.5)*0.035);
+    g.uniform1f(U.fill,S.fill);
+    g.uniform1f(U.overlay,R.overlay?1:0);
+    /* how much of what sits behind the sheet survives through its glass */
+    g.uniform1f(U.alpha,0.9);
+  }
+  function pass(R, now, list, base){
+    if(!R) return;
+    const g=R.g;
+    setCommon(R, now);
+    g.disable(g.SCISSOR_TEST);
+    if(R.overlay){
+      g.clearColor(0,0,0,0); g.clear(g.COLOR_BUFFER_BIT);
+    } else {
+      g.uniform4f(R.U.panel,0,0,0,0); g.uniform1f(R.U.panelr,0); g.uniform1f(R.U.panela,1);
+      g.drawArrays(g.TRIANGLES,0,3);
+    }
+    for(const rec of list.map(rectOf)){
+      if(!rec) continue;
+      let {x0,y0,x1,y1}=rec.box;
+      if(rec.clip){
+        const c=boxOf(rec.clip);
+        x0=Math.max(x0,c.x0); x1=Math.min(x1,c.x1);
+        y0=Math.max(y0,c.y0); y1=Math.min(y1,c.y1);
+      }
+      if(x1-x0<1||y1-y0<1) continue;
+      g.enable(g.SCISSOR_TEST);
+      g.scissor(Math.floor(x0),Math.floor(y0),Math.ceil(x1-x0),Math.ceil(y1-y0));
+      g.uniform4f(R.U.panel,rec.cx,rec.cy,rec.hx,rec.hy);
+      g.uniform1f(R.U.panelr,rec.r); g.uniform1f(R.U.panela,rec.a);
+      g.drawArrays(g.TRIANGLES,0,3);
+    }
+    g.disable(g.SCISSOR_TEST);
+  }
+  function frame(now){
+    resize();
+    pass(back, now, backSurfaces);
+    pass(front, now, frontSurfaces);
+    /* the blur layer only exists where a second panel is actually under the sheet */
+    const pr=panelEl.getBoundingClientRect(), br=blurbEl.getBoundingClientRect();
+    const overlap=isOpen() &&
+      br.right>pr.left && br.left<pr.right && br.bottom>pr.top && br.top<pr.bottom &&
+      parseFloat(getComputedStyle(blurbEl).opacity)>0.02;
+    if(overlap){
+      frostEl.style.left=pr.left+"px"; frostEl.style.top=pr.top+"px";
+      frostEl.style.width=pr.width+"px"; frostEl.style.height=pr.height+"px";
+      frostEl.style.opacity="1";
+    } else frostEl.style.opacity="0";
+    if(!still) requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+  window.__draw=frame;
+
+  /* capture helper: freeze the shader output into a CSS background so the page can be
+     screenshotted on a software renderer without compositing a live GL surface */
+  if(q.get("snap")){
+    frame(performance.now());
+    const url=cv.toDataURL('image/png');
+    cv.style.display="none";
+    document.body.style.backgroundImage=`url(${url})`;
+    document.body.style.backgroundSize="cover";
+    document.body.style.backgroundPosition="center";
+    cv.style.position="static";
+  }
+
+  window.__state=()=>({...S});
+  window.__rects=()=>surfaces.map(s=>[s.el.id, rectOf(s).map(v=>+v.toFixed(3))]);
+})();
+</script>
+</body></html>
