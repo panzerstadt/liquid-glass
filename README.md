@@ -1,3 +1,5 @@
+<img width="1172" height="656" alt="Screenshot 2026-11-27 at 17 34 04" src="https://github.com/user-attachments/assets/dc3bf532-1b11-4e21-9375-7453442f04e0" />
+
 # Liquid Glass
 
 A single-file WebGL2 implementation of the "liquid glass" material — the thing Apple ships in
